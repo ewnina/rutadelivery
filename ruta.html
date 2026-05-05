@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: sans-serif; background: transparent; color: #222; }
+
+.container { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
+
+.top-bar {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+}
+
+.btn {
+  font-size: 13px; padding: 6px 14px; border-radius: 8px;
+  border: 1px solid #ccc; background: #fff;
+  color: #222; cursor: pointer;
+}
+
+.btn:hover { background: #f3f3f3; }
+
+.btn.primary {
+  background: #1A3A5C; color: #fff; border-color: #1A3A5C;
+}
+
+.map-wrapper {
+  position: relative; width: 100%; height: 420px;
+  border-radius: 12px;
+  border: 1px solid #ddd;
+  overflow: hidden;
+  background: #e8f0e4;
+}
+
+#map { width: 100%; height: 100%; }
+
+.panel {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.panel-title {
+  font-size: 13px; font-weight: 600; color: #555;
+  text-transform: uppercase; margin-bottom: 10px;
+}
+
+.stop-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+
+.stop-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 8px;
+  border: 1px solid #ddd;
+  background: #f7f7f7;
+  font-size: 13px; cursor: pointer;
+}
+
+.stop-item.delivered { opacity: .5; }
+
+.stop-num {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; flex-shrink: 0;
+  color: #fff;
+}
+
+.stop-info { flex: 1; }
+
+.stop-name { font-weight: 600; }
+
+.stop-addr { font-size: 11px; color: #666; }
+
+.stop-status {
+  font-size: 11px; padding: 2px 8px; border-radius: 20px;
+  border: 1px solid; flex-shrink: 0;
+}
+
+.status-pending { color: #b36b00; border-color: #b36b00; background: #fff4df; }
+.status-done { color: #2E9E6A; border-color: #2E9E6A; background: #e7f7ef; }
+.status-next { color: #fff; background: #1A3A5C; border-color: #1A3A5C; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+
+.stat-card {
+  background: #f7f7f7;
+  border-radius: 8px;
+  padding: 10px 12px; text-align: center;
+}
+
+.stat-num { font-size: 22px; font-weight: 600; }
+.stat-label { font-size: 11px; color: #666; margin-top: 2px; }
+
+.add-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+
+.add-form input {
+  flex: 1; min-width: 130px; font-size: 13px; padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  background: #fff;
+  color: #222;
+}
+
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: #666; align-items: center; }
+
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+
+/* Oculta el panel de instrucciones de Leaflet Routing Machine */
+.leaflet-routing-container {
+  display: none !important;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+  <div class="top-bar">
+    <button class="btn primary" onclick="optimizeRoute()">⚡ Optimizar ruta</button>
+    <button class="btn" onclick="markNextDelivered()">✓ Marcar entregado</button>
+    <button class="btn" onclick="resetAll()">↺ Reiniciar</button>
+    <span id="route-distance" style="font-size:13px;color:#666;margin-left:4px"></span>
+  </div>
+
+  <div class="map-wrapper">
+    <div id="map"></div>
+    <div id="map-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#e8f0e4;font-size:14px;color:#555;">
+      Cargando mapa...
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><span class="legend-dot" style="background:#1A3A5C"></span>Depósito</span>
+    <span><span class="legend-dot" style="background:#E8593C"></span>Pendiente</span>
+    <span><span class="legend-dot" style="background:#2E9E6A"></span>Entregado</span>
+    <span><span class="legend-dot" style="background:#F2A623"></span>Siguiente</span>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-num" id="stat-total">0</div>
+      <div class="stat-label">Total paradas</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-done" style="color:#2E9E6A">0</div>
+      <div class="stat-label">Entregados</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-pending" style="color:#b36b00">0</div>
+      <div class="stat-label">Pendientes</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Paradas de entrega</div>
+    <div class="stop-list" id="stop-list"></div>
+
+    <div class="add-form">
+      <input type="text" id="inp-name" placeholder="Nombre cliente" />
+      <input type="text" id="inp-addr" placeholder="Dirección / barrio" />
+      <input type="number" id="inp-lat" placeholder="Lat" step="0.0001" style="max-width:110px"/>
+      <input type="number" id="inp-lng" placeholder="Lng" step="0.0001" style="max-width:110px"/>
+      <button class="btn primary" onclick="addStop()">+ Agregar</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+<script>
+const DEPOT = {
+  lat: 19.0541,
+  lng: -70.1520,
+  name: 'Depósito Central',
+  addr: 'Calle Principal, Cotuí'
+};
+
+const COLORS = ['#E8593C','#1A73E8','#9C27B0','#FF9800','#00ACC1','#E91E63','#43A047','#F44336'];
+
+let stops = [
+  { id:1, name:'Farmacia El Progreso', addr:'Calle Duarte #45', lat:19.0590, lng:-70.1480, delivered:false },
+  { id:2, name:'Colmado San Juan', addr:'Barrio Nuevo #12', lat:19.0510, lng:-70.1440, delivered:false },
+  { id:3, name:'Familia Rodríguez', addr:'Urb. Los Pinos', lat:19.0470, lng:-70.1560, delivered:false },
+  { id:4, name:'Supermercado La Fe', addr:'Av. Independencia', lat:19.0560, lng:-70.1600, delivered:false },
+  { id:5, name:'Tienda Don Pedro', addr:'Calle Sanchez #7', lat:19.0620, lng:-70.1510, delivered:false },
+  { id:6, name:'Ferretería El Clavo', addr:'Barrio Centro', lat:19.0500, lng:-70.1490, delivered:false },
+];
+
+let optimizedOrder = [...stops.map((_, i) => i)];
+let map;
+let markers = {};
+let depotMarker = null;
+let routingControl = null;
+
+function dist(a, b) {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+
+  const x =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(a.lat * Math.PI / 180) *
+    Math.cos(b.lat * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function nearestNeighbor(points) {
+  const pending = [...points.map((_, i) => i)];
+  const route = [];
+  let cur = DEPOT;
+
+  while (pending.length) {
+    let best = -1;
+    let bestD = Infinity;
+
+    pending.forEach((i, j) => {
+      const d = dist(cur, points[i]);
+      if (d < bestD) {
+        bestD = d;
+        best = j;
+      }
+    });
+
+    route.push(pending[best]);
+    cur = points[pending[best]];
+    pending.splice(best, 1);
+  }
+
+  return route;
+}
+
+function optimizeRoute() {
+  const pending = stops.filter(s => !s.delivered);
+
+  if (pending.length === 0) {
+    alert('Todas las entregas completadas.');
+    return;
+  }
+
+  const order = nearestNeighbor(pending);
+  optimizedOrder = order.map(i => stops.indexOf(pending[i]));
+
+  renderList();
+  drawRoute();
+}
+
+function drawRoute() {
+  if (routingControl) {
+    map.removeControl(routingControl);
+    routingControl = null;
+  }
+
+  const active = optimizedOrder.map(i => stops[i]).filter(s => !s.delivered);
+
+  if (active.length === 0) {
+    document.getElementById('route-distance').textContent = 'Ruta completada';
+    rebuildMarkers();
+    return;
+  }
+
+  const waypoints = [
+    L.latLng(DEPOT.lat, DEPOT.lng),
+    ...active.map(s => L.latLng(s.lat, s.lng)),
+    L.latLng(DEPOT.lat, DEPOT.lng)
+  ];
+
+  routingControl = L.Routing.control({
+    waypoints: waypoints,
+
+    router: L.Routing.osrmv1({
+      serviceUrl: 'https://router.project-osrm.org/route/v1'
+    }),
+
+    lineOptions: {
+      styles: [
+        {
+          color: '#1A3A5C',
+          weight: 5,
+          opacity: 0.85
+        }
+      ]
+    },
+
+    createMarker: function() {
+      return null;
+    },
+
+    addWaypoints: false,
+    draggableWaypoints: false,
+    fitSelectedRoutes: true,
+    routeWhileDragging: false,
+    show: false
+  }).addTo(map);
+
+  routingControl.on('routesfound', function(e) {
+    const summary = e.routes[0].summary;
+    const km = (summary.totalDistance / 1000).toFixed(1);
+    const mins = Math.round(summary.totalTime / 60);
+
+    document.getElementById('route-distance').textContent =
+      `Ruta real: ${km} km • ${mins} min aprox`;
+  });
+
+  routingControl.on('routingerror', function() {
+    document.getElementById('route-distance').textContent =
+      'No se pudo calcular la ruta por calles. Verifica las coordenadas.';
+  });
+
+  rebuildMarkers();
+}
+
+function rebuildMarkers() {
+  Object.values(markers).forEach(m => map.removeLayer(m));
+  markers = {};
+
+  stops.forEach((s, i) => {
+    const orderIdx = optimizedOrder.indexOf(i);
+    const isPending = !s.delivered;
+    const nextIndex = optimizedOrder.find(j => !stops[j].delivered);
+    const isNext = isPending && nextIndex === i;
+
+    const color = s.delivered ? '#2E9E6A' : isNext ? '#F2A623' : '#E8593C';
+    const label = s.delivered ? '✓' : orderIdx >= 0 ? (orderIdx + 1).toString() : '?';
+
+    const icon = L.divIcon({
+      className: '',
+      html: `
+        <div style="
+          width:26px;
+          height:26px;
+          border-radius:50%;
+          background:${color};
+          color:#fff;
+          font-size:11px;
+          font-weight:600;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          border:2px solid #fff;
+          box-shadow:0 1px 4px rgba(0,0,0,.3)">
+          ${label}
+        </div>
+      `,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13]
+    });
+
+    markers[s.id] = L.marker([s.lat, s.lng], { icon })
+      .addTo(map)
+      .bindPopup(`
+        <b>${s.name}</b><br>
+        ${s.addr}<br>
+        <small>${s.delivered ? '✓ Entregado' : 'Pendiente'}</small>
+      `);
+  });
+}
+
+function renderList() {
+  const el = document.getElementById('stop-list');
+  el.innerHTML = '';
+
+  const ordered = optimizedOrder.map(i => ({
+    stop: stops[i],
+    origIdx: i
+  }));
+
+  ordered.forEach(({ stop, origIdx }, rank) => {
+    const color = COLORS[rank % COLORS.length];
+    const nextItem = ordered.find(o => !o.stop.delivered);
+    const isNext = !stop.delivered && nextItem?.origIdx === origIdx;
+
+    const statusClass = stop.delivered ? 'status-done' : isNext ? 'status-next' : 'status-pending';
+    const statusTxt = stop.delivered ? 'Entregado' : isNext ? 'Próximo' : 'Pendiente';
+
+    const div = document.createElement('div');
+    div.className = 'stop-item' + (stop.delivered ? ' delivered' : '');
+
+    div.innerHTML = `
+      <div class="stop-num" style="background:${stop.delivered ? '#2E9E6A' : color}">
+        ${rank + 1}
+      </div>
+      <div class="stop-info">
+        <div class="stop-name">${stop.name}</div>
+        <div class="stop-addr">${stop.addr}</div>
+      </div>
+      <span class="stop-status ${statusClass}">${statusTxt}</span>
+    `;
+
+    div.onclick = () => {
+      if (map && stop.lat && stop.lng) {
+        map.setView([stop.lat, stop.lng], 16);
+      }
+
+      if (markers[stop.id]) {
+        markers[stop.id].openPopup();
+      }
+    };
+
+    el.appendChild(div);
+  });
+
+  updateStats();
+}
+
+function updateStats() {
+  const total = stops.length;
+  const done = stops.filter(s => s.delivered).length;
+
+  document.getElementById('stat-total').textContent = total;
+  document.getElementById('stat-done').textContent = done;
+  document.getElementById('stat-pending').textContent = total - done;
+}
+
+function markNextDelivered() {
+  const nextIdx = optimizedOrder.find(i => !stops[i].delivered);
+
+  if (nextIdx === undefined) {
+    alert('Todas las entregas completadas!');
+    return;
+  }
+
+  stops[nextIdx].delivered = true;
+
+  renderList();
+  drawRoute();
+}
+
+function addStop() {
+  const name = document.getElementById('inp-name').value.trim();
+  const addr = document.getElementById('inp-addr').value.trim();
+
+  const lat = parseFloat(document.getElementById('inp-lat').value) || 19.054 + Math.random() * 0.02 - 0.01;
+  const lng = parseFloat(document.getElementById('inp-lng').value) || -70.150 + Math.random() * 0.02 - 0.01;
+
+  if (!name) {
+    alert('Escribe el nombre del cliente');
+    return;
+  }
+
+  const id = Date.now();
+
+  stops.push({
+    id,
+    name,
+    addr: addr || 'Sin dirección',
+    lat,
+    lng,
+    delivered: false
+  });
+
+  optimizedOrder = [...stops.map((_, i) => i)];
+
+  ['inp-name', 'inp-addr', 'inp-lat', 'inp-lng'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+
+  optimizeRoute();
+}
+
+function resetAll() {
+  stops.forEach(s => s.delivered = false);
+  optimizedOrder = [...stops.map((_, i) => i)];
+  optimizeRoute();
+}
+
+window.addEventListener('load', () => {
+  map = L.map('map').setView([19.0541, -70.1520], 14);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap',
+    maxZoom: 19
+  }).addTo(map);
+
+  document.getElementById('map-loading').style.display = 'none';
+
+  const depotIcon = L.divIcon({
+    className: '',
+    html: `
+      <div style="
+        width:30px;
+        height:30px;
+        border-radius:6px;
+        background:#1A3A5C;
+        color:#fff;
+        font-size:16px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        border:2px solid #fff;
+        box-shadow:0 1px 4px rgba(0,0,0,.3)">
+        ⬡
+      </div>
+    `,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15]
+  });
+
+  depotMarker = L.marker([DEPOT.lat, DEPOT.lng], { icon: depotIcon })
+    .addTo(map)
+    .bindPopup(`<b>${DEPOT.name}</b><br>${DEPOT.addr}`);
+
+  optimizeRoute();
+});
+</script>
+
+</body>
+</html>
